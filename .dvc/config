@@ -1,4 +1,4 @@
 [core]
     remote = myremote
 ['remote "myremote"']
-    url = C:\Users\sudar\AppData\Local\Temp
+    url = azure://emocontainer
