@@ -1,102 +1,114 @@
-#!/usr/bin/env python3
-import os
-import sys
-import logging
-from typing import Tuple
-
+# feature engineering
+import numpy as np
 import pandas as pd
+import os
 from sklearn.feature_extraction.text import CountVectorizer
+import yaml
+import logging
+import pickle
 
+# logging configuration
+logger = logging.getLogger('feature_engineering')
+logger.setLevel('DEBUG')
 
-logger = logging.getLogger("feature_building")
-logger.setLevel(logging.DEBUG)
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    ch.setFormatter(fmt)
-    logger.addHandler(ch)
+console_handler = logging.StreamHandler()
+console_handler.setLevel('DEBUG')
 
+file_handler = logging.FileHandler('feature_engineering_errors.log')
+file_handler.setLevel('ERROR')
 
-def load_csv(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        logger.error("File not found: %s", path)
-        raise FileNotFoundError(path)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+def load_params(params_path: str) -> dict:
+    """Load parameters from a YAML file."""
     try:
-        df = pd.read_csv(path)
-    except Exception as e:
-        logger.exception("Failed to read CSV at %s: %s", path, e)
+        with open(params_path, 'r') as file:
+            params = yaml.safe_load(file)
+        logger.debug('Parameters retrieved from %s', params_path)
+        return params
+    except FileNotFoundError:
+        logger.error('File not found: %s', params_path)
         raise
-    if df.empty:
-        logger.error("Loaded dataframe is empty: %s", path)
-        raise ValueError(f"Empty dataframe: {path}")
-    return df
+    except yaml.YAMLError as e:
+        logger.error('YAML error: %s', e)
+        raise
+    except Exception as e:
+        logger.error('Unexpected error: %s', e)
+        raise
 
+def load_data(file_path: str) -> pd.DataFrame:
+    """Load data from a CSV file."""
+    try:
+        df = pd.read_csv(file_path)
+        df.fillna('', inplace=True)
+        logger.debug('Data loaded and NaNs filled from %s', file_path)
+        return df
+    except pd.errors.ParserError as e:
+        logger.error('Failed to parse the CSV file: %s', e)
+        raise
+    except Exception as e:
+        logger.error('Unexpected error occurred while loading the data: %s', e)
+        raise
 
-def build_bow(
-    X_train_texts: pd.Series, X_test_texts: pd.Series, max_features: int = 50
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def apply_bow(train_data: pd.DataFrame, test_data: pd.DataFrame, max_features: int) -> tuple:
+    """Apply Count Vectorizer to the data."""
     try:
         vectorizer = CountVectorizer(max_features=max_features)
-        X_train_bow = vectorizer.fit_transform(X_train_texts)
-        X_test_bow = vectorizer.transform(X_test_texts)
+
+        X_train = train_data['content'].values
+        y_train = train_data['sentiment'].values
+        X_test = test_data['content'].values
+        y_test = test_data['sentiment'].values
+
+        X_train_bow = vectorizer.fit_transform(X_train)
+        X_test_bow = vectorizer.transform(X_test)
+
         train_df = pd.DataFrame(X_train_bow.toarray())
+        train_df['label'] = y_train
+
         test_df = pd.DataFrame(X_test_bow.toarray())
+        test_df['label'] = y_test
+
+        pickle.dump(vectorizer, open('models/vectorizer.pkl', 'wb'))
+
+
+
+        logger.debug('Bag of Words applied and data transformed')
         return train_df, test_df
     except Exception as e:
-        logger.exception("Failed to build BoW features: %s", e)
+        logger.error('Error during Bag of Words transformation: %s', e)
         raise
 
-
-def save_dfs(train_df: pd.DataFrame, test_df: pd.DataFrame, out_dir: str) -> None:
+def save_data(df: pd.DataFrame, file_path: str) -> None:
+    """Save the dataframe to a CSV file."""
     try:
-        os.makedirs(out_dir, exist_ok=True)
-        train_out = os.path.join(out_dir, "train_bow.csv")
-        test_out = os.path.join(out_dir, "test_bow.csv")
-        train_df.to_csv(train_out, index=False)
-        test_df.to_csv(test_out, index=False)
-        logger.info("Saved train -> %s and test -> %s", train_out, test_out)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        df.to_csv(file_path, index=False)
+        logger.debug('Data saved to %s', file_path)
     except Exception as e:
-        logger.exception("Failed to save CSVs to %s: %s", out_dir, e)
+        logger.error('Unexpected error occurred while saving the data: %s', e)
         raise
 
-
-def main() -> None:
-    train_src = "./data/interim/train_processed.csv"
-    test_src = "./data/interim/test_processed.csv"
-    out_dir = os.path.join("data", "processed")
+def main():
     try:
-        train_data = load_csv(train_src)
-        test_data = load_csv(test_src)
+        params = load_params('params.yaml')
+        max_features = params['feature_engineering']['max_features']
 
-        train_data.fillna("", inplace=True)
-        test_data.fillna("", inplace=True)
+        train_data = load_data('./data/interim/train_processed.csv')
+        test_data = load_data('./data/interim/test_processed.csv')
 
-        if "content" not in train_data.columns or "sentiment" not in train_data.columns:
-            logger.error("train_processed.csv missing required columns ('content','sentiment')")
-            raise KeyError("Missing columns in train_processed.csv")
-        if "content" not in test_data.columns or "sentiment" not in test_data.columns:
-            logger.error("test_processed.csv missing required columns ('content','sentiment')")
-            raise KeyError("Missing columns in test_processed.csv")
+        train_df, test_df = apply_bow(train_data, test_data, max_features)
 
-        X_train = train_data["content"].astype(str)
-        y_train = train_data["sentiment"].values
-        X_test = test_data["content"].astype(str)
-        y_test = test_data["sentiment"].values
-
-        train_df, test_df = build_bow(X_train, X_test, max_features=50)
-
-        train_df["label"] = y_train
-        test_df["label"] = y_test
-
-        save_dfs(train_df, test_df, out_dir)
-
-        logger.info("Feature engineering completed successfully.")
-        sys.exit(0)
+        save_data(train_df, os.path.join("./data", "processed", "train_bow.csv"))
+        save_data(test_df, os.path.join("./data", "processed", "test_bow.csv"))
     except Exception as e:
-        logger.exception("Feature engineering failed: %s", e)
-        sys.exit(1)
+        logger.error('Failed to complete the feature engineering process: %s', e)
+        print(f"Error: {e}")
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
