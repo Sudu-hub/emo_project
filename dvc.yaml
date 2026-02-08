@@ -45,6 +45,8 @@ stages:
       - reports/metrics.json
 
   model_registration:
-    cmd: python src/model/register_model.py
+    cmd: python src/model/register_model.py --stage ${model.stage}
     deps:
       - src/model/register_model.py
+    params:
+      - model.stage

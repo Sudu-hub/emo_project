@@ -1,6 +1,7 @@
 # register_model.py
 
 import os
+import argparse
 import logging
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -11,94 +12,102 @@ from dotenv import load_dotenv
 # =========================
 load_dotenv()
 
-dagshub_token = os.getenv("DAGSHUB_PAT")
-if not dagshub_token:
+DAGSHUB_PAT = os.getenv("DAGSHUB_PAT")
+if not DAGSHUB_PAT:
     raise EnvironmentError("DAGSHUB_PAT environment variable is not set")
 
-os.environ["MLFLOW_TRACKING_USERNAME"] = dagshub_token
-os.environ["MLFLOW_TRACKING_PASSWORD"] = dagshub_token
-
-dagshub_url = "https://dagshub.com"
-repo_owner = "sudarshansahane1044"
-repo_name = "emo_project"
+os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_PAT
+os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_PAT
 
 mlflow.set_tracking_uri(
-    f"{dagshub_url}/{repo_owner}/{repo_name}.mlflow"
+    "https://dagshub.com/sudarshansahane1044/emo_project.mlflow"
 )
 
 # =========================
 # LOGGING
 # =========================
 logger = logging.getLogger("model_registration")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 if not logger.handlers:
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-
-    file_handler = logging.FileHandler("model_registration_errors.log")
-    file_handler.setLevel(logging.ERROR)
-
+    handler = logging.StreamHandler()
     formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        "%(asctime)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+# =========================
+# PROMOTION LOGIC
+# =========================
+def promote_model(model_name: str, stage: str, version: int | None):
+    client = MlflowClient()
+
+    versions = client.search_model_versions(
+        f"name='{model_name}'"
+    )
+    if not versions:
+        raise RuntimeError(f"No versions found for model '{model_name}'")
+
+    if version is not None:
+        selected = next(
+            (v for v in versions if int(v.version) == version),
+            None
+        )
+        if not selected:
+            raise RuntimeError(
+                f"Version {version} not found for model '{model_name}'"
+            )
+    else:
+        selected = max(versions, key=lambda v: int(v.version))
+
+    client.set_model_version_tag(
+        name=model_name,
+        version=selected.version,
+        key="stage",
+        value=stage
     )
 
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-
-# =========================
-# REGISTER / TAG MODEL
-# =========================
-def register_model(model_name: str, stage: str = "staging"):
-    """
-    Tag the latest version of a registered model.
-    Works with modern MLflow (name= logging).
-    """
-    try:
-        client = MlflowClient()
-
-        versions = client.search_model_versions(
-            f"name='{model_name}'"
-        )
-
-        if not versions:
-            raise RuntimeError(f"No versions found for model '{model_name}'")
-
-        # get latest version
-        latest_version = max(
-            versions,
-            key=lambda v: int(v.version)
-        )
-
-        client.set_model_version_tag(
-            name=model_name,
-            version=latest_version.version,
-            key="stage",
-            value=stage
-        )
-
-        logger.info(
-            "Model '%s' version %s tagged as '%s'",
-            model_name,
-            latest_version.version,
-            stage
-        )
-
-    except Exception as e:
-        logger.error("Model registration failed: %s", e)
-        raise
+    logger.info(
+        "✅ Model '%s' version %s promoted to '%s'",
+        model_name,
+        selected.version,
+        stage
+    )
 
 # =========================
 # MAIN
 # =========================
 def main():
-    model_name = "my_model"
-    stage = "staging"   # change to "production" when ready
+    parser = argparse.ArgumentParser(
+        description="Promote MLflow model to a stage"
+    )
 
-    register_model(model_name, stage)
+    parser.add_argument(
+        "--model-name",
+        default="my_model",
+        help="Registered model name"
+    )
+    parser.add_argument(
+        "--stage",
+        required=True,
+        choices=["staging", "production"],
+        help="Target stage"
+    )
+    parser.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        help="Specific version to promote (optional)"
+    )
+
+    args = parser.parse_args()
+
+    promote_model(
+        model_name=args.model_name,
+        stage=args.stage,
+        version=args.version
+    )
 
 if __name__ == "__main__":
     main()
