@@ -6,6 +6,9 @@ on:
       - main
       - master
 
+permissions:
+  contents: read
+
 jobs:
   project-testing:
     runs-on: ubuntu-latest
@@ -40,26 +43,22 @@ jobs:
         run: python -m unittest tests/test_model.py
 
       - name: Promote model to production
-        if: success()
         env:
           DAGSHUB_PAT: ${{ secrets.DAGSHUB_PAT }}
         run: python scripts/promote_model.py
 
       - name: Run Flask app tests
-        if: success()
         env:
           DAGSHUB_PAT: ${{ secrets.DAGSHUB_PAT }}
         run: python -m unittest tests/test_flask_app.py
 
       - name: Configure AWS credentials
-        if: success()
         run: |
           aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws configure set default.region ap-southeast-2
 
       - name: Login to AWS ECR
-        if: success()
         run: |
           aws ecr get-login-password \
           | docker login \
@@ -67,22 +66,18 @@ jobs:
             --password-stdin 051826734860.dkr.ecr.ap-southeast-2.amazonaws.com
 
       - name: Build Docker image
-        if: success()
         run: docker build -t campusx_ecr .
 
       - name: Tag Docker image
-        if: success()
         run: |
           docker tag campusx_ecr:latest \
           051826734860.dkr.ecr.ap-southeast-2.amazonaws.com/campusx_ecr:latest
 
       - name: Push Docker image
-        if: success()
         run: |
           docker push 051826734860.dkr.ecr.ap-southeast-2.amazonaws.com/campusx_ecr:latest
 
       - name: Zip deployment files
-        if: success()
         run: |
           zip -r deployment.zip \
             appspec.yml \
@@ -90,13 +85,11 @@ jobs:
             deploy/scripts/start_docker.sh
 
       - name: Upload ZIP to S3
-        if: success()
         run: |
           aws s3 cp deployment.zip \
           s3://campusxcodedeploybucket/deployment.zip
 
       - name: Deploy to AWS CodeDeploy
-        if: success()
         run: |
           aws deploy create-deployment \
             --application-name MyDockerApp2 \
